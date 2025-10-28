@@ -21,6 +21,7 @@ def generate_fake_data():
     first_name = fake.first_name()
     last_name = fake.last_name()
 
-    birth_date = fake.date_of_birth(minimum_age=18, maximum_age=30)
+    # Ensure 19+ age (minimum_age=19 guarantees they are at least 19 years old)
+    birth_date = fake.date_of_birth(minimum_age=19, maximum_age=35)
 
     return login, password, first_name, last_name, birth_date

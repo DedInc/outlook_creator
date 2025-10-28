@@ -1,4 +1,6 @@
-selenium
+patchright
 faker
 requests
+aiohttp
+aiofiles
 openpyxl

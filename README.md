@@ -17,16 +17,16 @@ Python script that automatically create Outlook account
 
 ## Installation
 
-1. Clone outlook-account-creator repository from github:
+1. Clone outlook_creator repository from github:
 
 ```bash
-  git clone https://github.com/Skuxblan/Outlook-account-creator.git
+  git clone https://github.com/DedInc/outlook_creator.git
 ```
 
 2. Move to project directory: 
 
 ```bash
-  cd outlook-account-creator
+  cd outlook_creator
 ```
 
 3. Install the required dependencies using pip:
@@ -73,6 +73,7 @@ which means you won't use any proxy. If you want to use HTTP proxy with that too
 - `0` value - no proxy
 - `1` value - proxy without auth
 - `2` value - proxy with login and password auth
+
 ## Worth mention
 
 - This script is dedicated for chrome browser

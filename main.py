@@ -1,12 +1,10 @@
 import os
 import zipfile
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait, Select
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-import time
+import aiohttp
+import aiofiles
+import random
+from patchright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import asyncio
 import json
 from fake_data import generate_fake_data
 from check_email import check_email
@@ -23,150 +21,195 @@ username = config['username']
 password = config['password']
 
 
+async def download_nopecha_extension():
+    """Download and extract NopeCHA extension if it doesn't exist"""
+    extension_dir = './nopecha'
+    version_file = './nopecha/.version'
 
-def create_proxy_extension_v3(proxy_host, proxy_port, username=None, password=None):
-    """Install plugin on the fly for proxy authentication
-    
-    :type chrome_options: ChromeOptions
-    :param chrome_options: ChromeOptions instance to add plugin
-    :type proxy_host: str
-    :param proxy_host: Proxy host
-    :type proxy_port: int
-    :param proxy_port: Proxy port
-    :type username: str
-    :param username: Proxy username
-    :type password: str
-    :param password: Proxy password
-    """
+    # Check if extension already exists and is the correct version
+    if os.path.exists(extension_dir) and os.path.isdir(extension_dir):
+        # Check if it's the correct version (chromium.zip for channel="chrome")
+        if os.path.exists(version_file):
+            async with aiofiles.open(version_file, 'r') as f:
+                version = (await f.read()).strip()
+                if version == 'chromium':
+                    print("NopeCHA extension (chromium version) already exists")
+                    return True
+                else:
+                    print(f"Wrong NopeCHA version detected ({version}). Re-downloading correct version...")
+                    import shutil
+                    shutil.rmtree(extension_dir)
+        else:
+            print("NopeCHA extension version unknown. Re-downloading...")
+            import shutil
+            shutil.rmtree(extension_dir)
 
-    manifest_json = """
-{
-    "version": "1.0.0",
-    "manifest_version": 3,
-    "name": "kanwas",
-    "permissions": [
-        "proxy",
-        "tabs",
-        "unlimitedStorage",
-        "storage",
-        "webRequest",
-        "webRequestAuthProvider"
-    ],
-    "host_permissions": [
-        "<all_urls>"
-    ],
-    "background": {
-        "service_worker": "background.js"
-    },
-    "minimum_chrome_version": "108"
-}
-"""
+    print("NopeCHA extension not found. Downloading...")
 
-    background_js = """
-var config = {
-    mode: "fixed_servers",
-    rules: {
-        singleProxy: {
-            scheme: "http",
-            host: "%s",
-            port: %s
-        },
-        bypassList: ["localhost"]
-    }
-};
+    try:
+        # Download chromium.zip (for real Chrome browser with channel="chrome")
+        # chromium.zip = for installed Chrome/Edge browsers
+        # chromium_automation.zip = for Playwright's bundled Chromium (when not using channel)
+        url = "https://github.com/NopeCHALLC/nopecha-extension/releases/latest/download/chromium.zip"
+        print(f"Downloading chromium.zip from: {url}")
 
-chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                response.raise_for_status()
 
-""" % (
-        proxy_host,
-        proxy_port,
-    )
+                # Save the zip file
+                zip_path = './nopecha_extension.zip'
+                async with aiofiles.open(zip_path, 'wb') as f:
+                    await f.write(await response.read())
 
-    if username and password:
-        background_js += """
-function callbackFn(details) {
-    return {
-        authCredentials: {
-            username: "%s",
-            password: "%s"
-        }
-    };
-}
+        print("Download complete. Extracting...")
 
-chrome.webRequest.onAuthRequired.addListener(
-    callbackFn,
-    { urls: ["<all_urls>"] },
-    ['blocking']
-);
-""" % (
-            username,
-            password,
-        )
+        # Extract the zip file (synchronous, but fast operation)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extension_dir)
 
-    pluginfile = 'proxy_auth_plugin.zip'
+        # Create version marker file
+        async with aiofiles.open(version_file, 'w') as f:
+            await f.write('chromium')
 
-    with zipfile.ZipFile(pluginfile, 'w') as zp:
-        zp.writestr("manifest.json", manifest_json)
-        zp.writestr("background.js", background_js)
+        # Remove the zip file
+        os.remove(zip_path)
 
-    return pluginfile
+        print("NopeCHA extension (chromium version) installed successfully!")
+        return True
+
+    except Exception as e:
+        print(f"Error downloading NopeCHA extension: {e}")
+        print("Please download manually from: https://github.com/NopeCHALLC/nopecha-extension/releases/latest")
+        print("Download chromium.zip for use with channel='chrome'")
+        return False
 
 class AccGen:
-    def __init__(self, config_file=None, proxy_host=None, proxy_port=None, username=None, password=None):
-        self.driver = None
+    def __init__(self, proxy_host=None, proxy_port=None, username=None, password=None):
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
         self.proxy_host = proxy_host
         self.proxy_port = proxy_port
         self.username = username
         self.password = password
+        self.api_key = config.get('api_key', '')
 
-    def open_signup_page(self):
-        chrome_options = Options()
-        chrome_options.add_argument("--lang=en")
-        chrome_options.add_argument("--headless=new")
+    async def open_signup_page(self):
+        if not self.playwright:
+            # Download NopeCHA extension if it doesn't exist
+            await download_nopecha_extension()
 
-        if not self.driver:
             mode = config['mode']
-    
-            if mode == 0:
-                print("Not using proxy")
-            elif mode == 1:
+
+            # Setup proxy configuration
+            proxy_config = None
+            if mode == 1:
                 print("Using proxy without authentication")
-                proxy_auth_plugin_path = create_proxy_extension_v3(
-                    self.proxy_host,
-                    self.proxy_port
-                )
-                chrome_options.add_extension(proxy_auth_plugin_path)
+                proxy_config = {
+                    "server": f"http://{self.proxy_host}:{self.proxy_port}"
+                }
             elif mode == 2:
                 print("Using proxy with authentication")
-                proxy_auth_plugin_path = create_proxy_extension_v3(
-                    self.proxy_host,
-                    self.proxy_port,
-                    self.username,
-                    self.password,
-                )
-                chrome_options.add_extension(proxy_auth_plugin_path)
-    
-            self.driver = webdriver.Chrome(options=chrome_options)
+                proxy_config = {
+                    "server": f"http://{self.proxy_host}:{self.proxy_port}",
+                    "username": self.username,
+                    "password": self.password
+                }
+            else:
+                print("Not using proxy")
 
-            time.sleep(2)
-            self.driver.get('https://www.google.com')
-            time.sleep(2)
+            # Start Playwright
+            self.playwright = await async_playwright().start()
 
-            self.driver.get('https://signup.live.com/signup')
-            time.sleep(2)
+            # Launch browser with Chrome channel
+            launch_options = {
+                "channel": "chrome",
+                "headless": False,
+                "args": [
+                    "--lang=en",
+                    "--disable-blink-features=AutomationControlled",
+                    f"--disable-extensions-except=./nopecha",
+                    f"--load-extension=./nopecha"
+                ]
+            }
+
+            if proxy_config:
+                launch_options["proxy"] = proxy_config
+
+            self.browser = await self.playwright.chromium.launch(**launch_options)
+
+            # Create context with NopeCHA settings
+            self.context = await self.browser.new_context(
+                locale="en-US"
+            )
+
+            # Create page
+            self.page = await self.context.new_page()
+
+            # Configure NopeCHA extension
+            try:
+                # Visit NopeCHA setup page to configure the extension
+                await self.page.goto('https://nopecha.com/setup')
+
+                if self.api_key and self.api_key != "token_here":
+                    # Set NopeCHA API key via localStorage
+                    await self.page.evaluate(f"""
+                        localStorage.setItem('nopecha-key', '{self.api_key}');
+                        localStorage.setItem('nopecha-enabled', 'true');
+                    """)
+                    print("NopeCHA API key configured successfully")
+                else:
+                    # Enable NopeCHA without API key (uses free trial credits)
+                    await self.page.evaluate("""
+                        localStorage.setItem('nopecha-enabled', 'true');
+                    """)
+                    print("NopeCHA enabled with free trial (no API key)")
+            except Exception as e:
+                print(f"Warning: Could not configure NopeCHA: {e}")
+
+            # Visit Google first (helps with bot detection)
+            await self.page.goto('https://www.google.com', wait_until='domcontentloaded')
+            await asyncio.sleep(1 + random.uniform(0.5, 1.5))
+
+            # Navigate to signup page - don't wait for networkidle, just load
+            print("Navigating to Outlook signup page...")
+            await self.page.goto('https://signup.live.com/signup', wait_until='domcontentloaded')
+
+            # Wait for the actual form elements to appear instead of networkidle
+            print("Waiting for signup form elements to load...")
+            try:
+                # Wait for either email input or the switch link
+                await self.page.wait_for_selector('input[type="email"], #liveSwitch, #usernameInput', timeout=30000)
+                print("Signup page loaded successfully")
+            except PlaywrightTimeoutError:
+                print("Warning: Signup form not detected quickly, but continuing...")
+
+            # Random delay to appear more human-like
+            await asyncio.sleep(1.5 + random.uniform(0.5, 2.5))
 
 
-    def fill_signup_form(self):
-        # Wait until the element is available
-        element = WebDriverWait(self.driver, 30).until(
-            EC.presence_of_element_located((By.ID, "liveSwitch"))
-        )
-        # Click the element
-        element.click()
-        # Wait until the email input field is available
-        email_input = WebDriverWait(self.driver, 30).until(
-            EC.presence_of_element_located((By.ID, "usernameInput"))
-        )
+    async def fill_signup_form(self):
+        # Wait until the page is fully loaded
+        print("Waiting for signup form to load...")
+
+        # Wait until the email input field is available with multiple selectors
+        print("Waiting for email input field...")
+        email_input_selector = None
+        try:
+            await self.page.wait_for_selector('input[type="email"]', timeout=30000)
+            email_input_selector = 'input[type="email"]'
+            print("Found input[type='email']")
+        except PlaywrightTimeoutError:
+            try:
+                await self.page.wait_for_selector("#usernameInput", timeout=10000)
+                email_input_selector = "#usernameInput"
+                print("Found #usernameInput")
+            except PlaywrightTimeoutError:
+                await self.page.wait_for_selector('input[name="MemberName"]', timeout=10000)
+                email_input_selector = 'input[name="MemberName"]'
+                print("Found input[name='MemberName']")
 
         # Generate fake data and check email availability
         email_available = False
@@ -181,131 +224,223 @@ class AccGen:
                 print(f"{email} is not available. Generating new email ...")
 
         # If the email is available, continue with the registration process
-        email_input.send_keys(login)
+        print(f"Filling email input with: {email}")
+        await self.page.fill(email_input_selector, email)
+
+        # Small human-like delay after typing
+        await asyncio.sleep(random.uniform(0.3, 0.7))
 
         # Wait until the "Next" button is available and click it
-        next_button = WebDriverWait(self.driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "nextButton"))
-        )
-        next_button.click()
+        # New selector: button[data-testid="primaryButton"]
+        next_button_selector = None
+        try:
+            await self.page.wait_for_selector('button[data-testid="primaryButton"]', timeout=10000)
+            next_button_selector = 'button[data-testid="primaryButton"]'
+            print("Found Next button: button[data-testid='primaryButton']")
+        except PlaywrightTimeoutError:
+            try:
+                await self.page.wait_for_selector("#nextButton", timeout=10000)
+                next_button_selector = "#nextButton"
+                print("Found Next button: #nextButton")
+            except PlaywrightTimeoutError:
+                await self.page.wait_for_selector('button[type="submit"]', timeout=10000)
+                next_button_selector = 'button[type="submit"]'
+                print("Found Next button: button[type='submit']")
+
+        await self.page.click(next_button_selector)
+        print("Clicked Next button, waiting for password field...")
 
         # Wait until the password input field is available
-        password_input = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "Password"))
-        )
+        password_input_selector = None
+        try:
+            await self.page.wait_for_selector('input[type="password"]', timeout=10000)
+            password_input_selector = 'input[type="password"]'
+            print("Found password input: input[type='password']")
+        except PlaywrightTimeoutError:
+            await self.page.wait_for_selector("#Password", timeout=10000)
+            password_input_selector = "#Password"
+            print("Found password input: #Password")
 
         # Type the password into the input field
-        password_input.send_keys(password)
+        await self.page.fill(password_input_selector, password)
 
+        # Small human-like delay after typing
+        await asyncio.sleep(random.uniform(0.3, 0.7))
 
-        # Wait until the "Next" button is available after entering the password and click it
-        next_button_after_password = WebDriverWait(self.driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "nextButton"))
-        )
-        
-        next_button_after_password.click()
+        # Click Next button after password
+        try:
+            await self.page.wait_for_selector('button[data-testid="primaryButton"]', timeout=10000)
+            await self.page.click('button[data-testid="primaryButton"]')
+            print("Clicked Next button after password")
+        except PlaywrightTimeoutError:
+            await self.page.wait_for_selector("#nextButton", timeout=10000)
+            await self.page.click("#nextButton")
+            print("Clicked #nextButton after password")
 
         # Check if the password error message is present
         try:
-            password_error = WebDriverWait(self.driver, 2).until(
-                EC.presence_of_element_located((By.ID, "PasswordError"))
-            )
+            await self.page.wait_for_selector("#PasswordError", timeout=3000)
             print("Password error appeared. Restarting the registration process ...")
-            self.driver.get('https://signup.live.com/signup')  # Replace with the URL of your signup page
-            self.fill_signup_form()  # Restart the registration process
-        except TimeoutException:
-            # If the password error message is not present, continue with the registration process
+            await self.page.goto('https://signup.live.com/signup')
+            await self.fill_signup_form()  # Restart the registration process
+            return
+        except PlaywrightTimeoutError:
+            print("No password error, continuing to birth date...")
+            pass  # No error, continue
 
-            # Wait until the "Next" button is available after entering the password and click it
-            next_button_after_password = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.ID, "nextButton"))
-            )
-            next_button_after_password.click()
-
-        # Wait until the first name input field is available
-        first_name_input = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "firstNameInput"))
-        )
-        # Type the first name into the input field
-        first_name_input.send_keys(first_name)
-
-        # Wait until the last name input field is available
-        last_name_input = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "lastNameInput"))
-        )
-        # Type the last name into the input field
-        last_name_input.send_keys(last_name)
-
-
-
-        # Wait until the "Next" button is available after entering the name and click it
-        next_button_after_name = WebDriverWait(self.driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "nextButton"))
-        )
-        next_button_after_name.click()
+        # NEW ORDER: Birth date comes BEFORE name!
+        # Month names mapping
+        month_names = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
 
         # Wait until the birth month dropdown is available
-        birth_month_select = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "BirthMonth"))
-        )
-        # Select a month from the dropdown
-        Select(birth_month_select).select_by_value(str(birth_date.month))
+        try:
+            # Try standard select element first
+            await self.page.wait_for_selector('select[aria-label*="Month"]', timeout=5000)
+            await self.page.select_option('select[aria-label*="Month"]', str(birth_date.month))
+            print("Selected birth month")
+        except PlaywrightTimeoutError:
+            # Try Fluent UI dropdown button
+            await self.page.wait_for_selector('button[name="BirthMonth"]', timeout=5000)
 
+            # Check if dropdown is already expanded
+            is_expanded = await self.page.get_attribute('button[name="BirthMonth"]', 'aria-expanded')
+            if is_expanded != 'true':
+                # Click to open dropdown, force click to bypass label interception
+                await self.page.click('button[name="BirthMonth"]', force=True)
+                # Wait for dropdown options to appear
+                await self.page.wait_for_selector('[role="option"]', timeout=5000)
 
+            # Get month name and click the option by text
+            month_name = month_names[birth_date.month - 1]
+            await self.page.click(f'[role="option"]:has-text("{month_name}")')
+            print(f"Selected birth month: {month_name}")
+
+        # Small human-like delay
+        await asyncio.sleep(random.uniform(0.2, 0.5))
 
         # Wait until the birth day dropdown is available
-        birth_day_select = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "BirthDay"))
-        )
-        # Select a day from the dropdown
-        Select(birth_day_select).select_by_value(str(birth_date.day))
+        try:
+            # Try standard select element first
+            await self.page.wait_for_selector('select[aria-label*="Day"]', timeout=5000)
+            await self.page.select_option('select[aria-label*="Day"]', str(birth_date.day))
+            print("Selected birth day")
+        except PlaywrightTimeoutError:
+            # Try Fluent UI dropdown button
+            await self.page.wait_for_selector('button[name="BirthDay"]', timeout=5000)
 
+            # Check if dropdown is already expanded
+            is_expanded = await self.page.get_attribute('button[name="BirthDay"]', 'aria-expanded')
+            if is_expanded != 'true':
+                # Click to open dropdown, force click to bypass label interception
+                await self.page.click('button[name="BirthDay"]', force=True)
+                # Wait for dropdown options to appear
+                await self.page.wait_for_selector('[role="option"]', timeout=5000)
 
+            # Click the option by text (day number)
+            await self.page.click(f'[role="option"]:has-text("{birth_date.day}")')
+            print(f"Selected birth day: {birth_date.day}")
+
+        # Small human-like delay
+        await asyncio.sleep(random.uniform(0.2, 0.5))
 
         # Wait until the birth year input field is available
-        birth_year_input = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "BirthYear"))
-        )
-        # Type the birth year into the input field
-        birth_year_input.send_keys(str(birth_date.year))
+        try:
+            # Try aria-label first
+            await self.page.wait_for_selector('input[aria-label*="Year"]', timeout=5000)
+            await self.page.fill('input[aria-label*="Year"]', str(birth_date.year))
+            print("Filled birth year")
+        except PlaywrightTimeoutError:
+            # Try name attribute
+            await self.page.wait_for_selector('input[name="BirthYear"]', timeout=5000)
+            await self.page.fill('input[name="BirthYear"]', str(birth_date.year))
+            print("Filled birth year using name attribute")
 
-        # Wait until the "Next" button is available after entering the birth date and click it
-        next_button_after_birth_date = WebDriverWait(self.driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "nextButton"))
-        )
-        next_button_after_birth_date.click()
+        # Small human-like delay after typing
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+
+        # Click Next button after birth date
+        try:
+            await self.page.wait_for_selector('button[data-testid="primaryButton"]', timeout=10000)
+            await self.page.click('button[data-testid="primaryButton"]')
+            print("Clicked Next button after birth date, waiting for name fields...")
+        except PlaywrightTimeoutError:
+            await self.page.wait_for_selector("#nextButton", timeout=10000)
+            await self.page.click("#nextButton")
+            print("Clicked #nextButton after birth date, waiting for name fields...")
+
+        # Fill in first name and last name
+        try:
+            # Wait for first name input
+            await self.page.wait_for_selector('input[name="firstNameInput"]', timeout=10000)
+            await self.page.fill('input[name="firstNameInput"]', first_name)
+            print(f"Filled first name: {first_name}")
+
+            # Small human-like delay between fields
+            await asyncio.sleep(random.uniform(0.2, 0.5))
+
+            # Fill last name
+            await self.page.fill('input[name="lastNameInput"]', last_name)
+            print(f"Filled last name: {last_name}")
+
+            # Small human-like delay after typing
+            await asyncio.sleep(random.uniform(0.3, 0.7))
+
+            # Click Next button after name
+            await self.page.click('button[data-testid="primaryButton"]')
+            print("Clicked Next button after name, waiting for CAPTCHA...")
+        except PlaywrightTimeoutError:
+            print("Name input fields not found, continuing...")
+            pass
 
         # Check if SMS verification is required
         try:
-            phone_number_label = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, '//label[contains(text(), "Phone number")]'))
-            )
+            await self.page.wait_for_selector('//label[contains(text(), "Phone number")]', timeout=10000)
             # If so, quit the script
             print("SMS verification required. Please change your proxy.")
-            self.driver.quit()
+            await self.browser.close()
+            await self.playwright.stop()
             return
-        except:
+        except PlaywrightTimeoutError:
             pass
 
-        print('Trying to solve captcha ...')
-        input("Résoudre le captcha puis appuyer sur Entrée…")
+        # NopeCHA will automatically solve the captcha
+        print('NopeCHA is solving the captcha automatically...')
+        if self.api_key and self.api_key != "token_here":
+            print('Using NopeCHA with API key')
+        else:
+            print('Using NopeCHA free trial (100 credits)')
 
-        # Wait up to 300 seconds for the captcha to be solved
-        ok_button = WebDriverWait(self.driver, 300).until(
-            EC.presence_of_element_located((By.XPATH, '//span[@class="ms-Button-label label-117" and @id="id__0"]'))
-        )
+        # Wait up to 300 seconds for NopeCHA to solve the captcha
+        try:
+            await self.page.wait_for_selector('//span[@class="ms-Button-label label-117" and @id="id__0"]', timeout=300000)
+            print("Captcha solved automatically by NopeCHA!")
+        except PlaywrightTimeoutError:
+            print("Captcha solving timed out.")
+            print("If you're using free trial, you may have run out of credits.")
+            print("You can get an API key at: https://nopecha.com/")
+            print("Or solve the captcha manually and press Enter...")
+            input("Press Enter after solving captcha manually...")
+            try:
+                await self.page.wait_for_selector('//span[@class="ms-Button-label label-117" and @id="id__0"]', timeout=60000)
+            except PlaywrightTimeoutError:
+                print("Captcha still not solved. Exiting...")
+                return
 
         print("Captcha solved! Account successfully generated.")
 
         # Save the generated email and password to a file
-        with open('generated.txt', 'a') as f:
+        async with aiofiles.open('generated.txt', 'a') as f:
             # Check if the file is empty
             if os.path.exists('generated.txt') and os.path.getsize('generated.txt') > 0:
-                f.write("\n")
-            f.write(f"Email: {email}\n")
-            f.write(f"Password: {password}\n")
+                await f.write("\n")
+            await f.write(f"Email: {email}\n")
+            await f.write(f"Password: {password}\n")
             print("Email and password saved to generated.txt")
 
+        import time
         row_data = [
             email,
             password,
@@ -324,16 +459,60 @@ class AccGen:
         ]
         append_account(row_data)
 
-    def create_account(self):
-        while True:
+    async def create_account(self):
+        try:
+            while True:
+                try:
+                    await self.open_signup_page()
+                    await self.fill_signup_form()
+                    break  # If the account creation process is successful, break out of the loop
+                except PlaywrightTimeoutError as e:
+                    print(f"Timeout occurred: {e}")
+                    print("Restarting the account creation process ...")
+                    # Close current browser instance before retry
+                    try:
+                        if self.page:
+                            await self.page.close()
+                        if self.context:
+                            await self.context.close()
+                        if self.browser:
+                            await self.browser.close()
+                        if self.playwright:
+                            await self.playwright.stop()
+                    except Exception:
+                        pass
+                    # Reset instances for retry
+                    self.playwright = None
+                    self.browser = None
+                    self.context = None
+                    self.page = None
+                    await asyncio.sleep(2)
+        finally:
+            # Clean up resources at the end
             try:
-                self.open_signup_page()
-                self.fill_signup_form()
-                break  # If the account creation process is successful, break out of the loop
-            except TimeoutException:
-                print("Timeout occurred. Restarting the account creation process ...")
-                self.driver.get('https://signup.live.com/signup')
+                if self.page:
+                    await self.page.close()
+            except Exception:
+                pass
+            try:
+                if self.context:
+                    await self.context.close()
+            except Exception:
+                pass
+            try:
+                if self.browser:
+                    await self.browser.close()
+            except Exception:
+                pass
+            try:
+                if self.playwright:
+                    await self.playwright.stop()
+            except Exception:
+                pass
+
+async def main():
+    acc_gen = AccGen(proxy_host=proxy_host, proxy_port=proxy_port, username=username, password=password)
+    await acc_gen.create_account()
 
 if __name__ == '__main__':
-    acc_gen = AccGen(config_file='config.json', proxy_host=proxy_host, proxy_port=proxy_port, username=username, password=password)
-    acc_gen.create_account()
+    asyncio.run(main())
