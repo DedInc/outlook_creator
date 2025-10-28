@@ -31,8 +31,20 @@ Python script that automatically create Outlook account
 
 3. Install the required dependencies using pip:
 
-```bsah
+```bash
 pip install -r requirements.txt
+```
+
+4. Fetch Camoufox browser:
+
+```bash
+camoufox fetch
+```
+
+Or alternatively:
+
+```bash
+python -m camoufox fetch
 ```
 ## Usage
 
@@ -76,15 +88,18 @@ which means you won't use any proxy. If you want to use HTTP proxy with that too
 
 ## Worth mention
 
-- This script is dedicated for chrome browser
-- Make sure you have added chromedriver to your path to avoid issues
-- I have noticed recently Microsoft requires a lot of captcha images to be solved. Something is up with detecting chromedriver. I've tried to use fingerprint solution, but the only one which is working good for me is not able to add extension to browser, so the process can't be fully autoomated.
+- This script now uses **Camoufox** - a Firefox-based browser automation tool that automatically generates & injects unique device characteristics to avoid detection
+- Camoufox uses BrowserForge under the hood to generate fingerprints that mimic real-world traffic
+- The script automatically calculates target geolocation, timezone, and locale to avoid proxy detection
+- No need to manually install Firefox or any drivers - Camoufox handles browser management automatically
+- Uses the Firefox version of NopeCHA extension for CAPTCHA solving
 
 
 ## Tips
 
 - If you noticed script detects SMS verification you should change your ip with proxy or wait some time.
-- Nopecha sometimes is not able to do captcha correctly, especially while number of images to be processed is above norm (up to 5) you should consider changing your proxy or take a break then. If you want to check what's going on disable headless mode in `main.py` file.
+- Nopecha sometimes is not able to do captcha correctly, especially while number of images to be processed is above norm (up to 5) you should consider changing your proxy or take a break then. The script runs in non-headless mode by default so you can see what's happening.
+- Camoufox provides better fingerprinting and anti-detection capabilities compared to traditional Playwright/Selenium setups.
 
 ## Contributing
 

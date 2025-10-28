@@ -1,4 +1,4 @@
-patchright
+camoufox[geoip]
 faker
 requests
 aiohttp
