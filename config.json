@@ -4,5 +4,6 @@
     "proxy_port": "",
     "username": "",
     "password": "",
-    "api_key": "token_here"
+    "api_key": "token_here",
+    "num_aliases": 2
 }

@@ -5,3 +5,5 @@ aiohttp
 aiofiles
 openpyxl
 geoip2
+mailtm-python
+selectolax

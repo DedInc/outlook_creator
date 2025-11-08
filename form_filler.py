@@ -305,7 +305,9 @@ class SignupFormFiller:
         email_available = False
         while not email_available:
             login, password, first_name, last_name, birth_date = generate_fake_data()
-            email = login + "@outlook.com"
+            # Randomly choose between @outlook.com and @hotmail.com for registration
+            domain = random.choice(["@outlook.com", "@hotmail.com"])
+            email = login + domain
             email_check_result = check_email(email)
             if email_check_result.get('isAvailable'):
                 print(f"{email} is available, continuing with the registration process ...")
@@ -589,7 +591,7 @@ class SignupFormFiller:
             print("✗ Captcha still not solved. Exiting...")
             return False
                 
-    async def save_account(self, email, password, first_name, last_name, birth_date):
+    async def save_account(self, email, password, first_name, last_name, birth_date, assoc_data=None):
         """Save generated account to file and Excel"""
         # Save the generated email and password to a file
         async with aiofiles.open('generated.txt', 'a') as f:
@@ -597,8 +599,36 @@ class SignupFormFiller:
             if os.path.exists('generated.txt') and os.path.getsize('generated.txt') > 0:
                 await f.write("\n")
             await f.write(f"Email: {email}\n")
+            
+            # Add aliases if available
+            if assoc_data and assoc_data.get('aliases'):
+                await f.write(f"Aliases:\n")
+                for alias in assoc_data['aliases']:
+                    await f.write(f" - {alias}\n")
+            
             await f.write(f"Password: {password}\n")
-            print("Email and password saved to generated.txt")
+            
+            # Add MailTM credentials if available
+            if assoc_data:
+                await f.write(f"Linked MailTM Account:\n")
+                await f.write(f" - Email: {assoc_data.get('mailtm_email', 'N/A')}\n")
+                await f.write(f" - Password: {assoc_data.get('mailtm_password', 'N/A')}\n")
+            
+            print("Account information saved to generated.txt")
+
+        # Format aliases for Excel (separate columns)
+        alias_1 = ""
+        alias_2 = ""
+        mailtm_email = ""
+        mailtm_password = ""
+        
+        if assoc_data:
+            if assoc_data.get('aliases'):
+                aliases = assoc_data['aliases']
+                alias_1 = aliases[0] if len(aliases) > 0 else ""
+                alias_2 = aliases[1] if len(aliases) > 1 else ""
+            mailtm_email = assoc_data.get('mailtm_email', '')
+            mailtm_password = assoc_data.get('mailtm_password', '')
 
         row_data = [
             email,
@@ -611,10 +641,10 @@ class SignupFormFiller:
             self.config.get("username", ""),
             self.config.get("password", ""),
             time.strftime("%Y-%m-%d %H:%M:%S"),
-            "",
-            "",
-            "",
-            "",
+            alias_1,
+            alias_2,
+            mailtm_email,
+            mailtm_password,
         ]
         append_account(row_data)
 

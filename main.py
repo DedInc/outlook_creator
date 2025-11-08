@@ -3,6 +3,7 @@ import json
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from browser_manager import BrowserManager
 from form_filler import SignupFormFiller
+from assoc_manager import AssocManager
 
 # Load the configuration from config.json
 with open('config.json', 'r') as f:
@@ -14,6 +15,7 @@ class AccGen:
     def __init__(self):
         self.browser_manager = BrowserManager(config)
         self.form_filler = None
+        self.assoc_manager = None
 
     async def open_signup_page(self):
         """Initialize browser and navigate to signup page"""
@@ -89,9 +91,37 @@ class AccGen:
             return
 
         print("Captcha solved! Account successfully generated.")
+        
+        # Add email aliases (assocs)
+        assoc_data = await self.add_email_aliases()
 
-        # Save account
-        await self.form_filler.save_account(email, password, first_name, last_name, birth_date)
+        # Save account with aliases and MailTM info
+        await self.form_filler.save_account(email, password, first_name, last_name, birth_date, assoc_data)
+    
+    async def add_email_aliases(self):
+        """Add email aliases to the created account"""
+        try:
+            # Initialize assoc manager if not already done
+            if not self.assoc_manager:
+                self.assoc_manager = AssocManager(self.browser_manager.page, config)
+            
+            # Get number of aliases from config, default to 2
+            num_aliases = config.get('num_aliases', 2)
+            
+            # Add the aliases (returns dict with aliases and MailTM credentials)
+            assoc_data = await self.assoc_manager.add_assocs(num_aliases)
+            
+            if assoc_data and assoc_data.get('aliases'):
+                print(f"\n✓ Successfully added {len(assoc_data['aliases'])} alias(es) to the account")
+                return assoc_data
+            else:
+                print("\n⚠️  No aliases were added")
+                return None
+                
+        except Exception as e:
+            print(f"\n⚠️  Error adding aliases: {e}")
+            print("Continuing without aliases...")
+            return None
 
     async def create_account(self):
         """Main account creation loop with retry logic"""

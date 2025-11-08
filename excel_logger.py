@@ -12,10 +12,10 @@ HEADERS = [
     "Proxy Username",
     "Proxy Password",
     "Created At",
-    "Col11",
-    "Col12",
-    "Col13",
-    "Col14",
+    "Alias 1",
+    "Alias 2",
+    "MailTM Email",
+    "MailTM Password",
 ]
 
 def append_account(row_data: list):
