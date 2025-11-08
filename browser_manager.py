@@ -100,6 +100,7 @@ class BrowserManager:
         camoufox_config = {
             "headless": False,
             "locale": "en-US",
+            "humanize": True,
         }
 
         # Only add addons if we have NopeCHA extension

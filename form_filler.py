@@ -3,6 +3,7 @@ import random
 import os
 import time
 import aiofiles
+import numpy as np
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from fake_data import generate_fake_data
 from check_email import check_email
@@ -17,31 +18,82 @@ class SignupFormFiller:
         self.config = config
         self.api_key = config.get('api_key', '')
 
+        # Create a unique "personality" for this session to vary behavior
+        # This makes each bot instance behave slightly differently
+        self.typing_speed_factor = random.uniform(0.7, 1.4)  # Some people type faster/slower
+        self.mistake_probability = random.uniform(0.02, 0.08)  # 2-8% chance of mistakes
+        self.distraction_probability = random.uniform(0.05, 0.15)  # 5-15% chance of distraction
+        self.patience_level = random.uniform(0.8, 1.3)  # Affects how long they wait
+        self.mouse_precision = random.uniform(0.2, 0.8)  # How precisely they click
+
+        # Track session state for more realistic behavior
+        self.actions_count = 0
+        self.last_mistake_action = -10  # Don't make mistakes too frequently
+
+    def _gaussian_delay(self, min_val, max_val, skew=0):
+        """
+        Generate more human-like delay using normal distribution instead of uniform.
+        Humans tend to cluster around average times, not uniformly distributed.
+
+        Args:
+            min_val: Minimum value
+            max_val: Maximum value
+            skew: Skew the distribution (-1 to 1, negative = faster, positive = slower)
+        """
+        mean = (min_val + max_val) / 2
+        # Standard deviation is about 1/6 of range (99.7% within range by 3-sigma rule)
+        std = (max_val - min_val) / 6
+
+        # Apply skew
+        if skew != 0:
+            mean += (max_val - min_val) * skew * 0.2
+
+        # Generate value from normal distribution
+        value = np.random.normal(mean, std)
+
+        # Clamp to range
+        return max(min_val, min(max_val, value))
+
     async def human_delay(self, min_seconds=0.5, max_seconds=2.0, delay_type="normal"):
         """
-        Generate human-like delays with various patterns.
+        Generate human-like delays with various patterns using realistic distributions.
 
         Args:
             min_seconds: Minimum delay time
             max_seconds: Maximum delay time
             delay_type: Type of delay pattern ("normal", "thinking", "reading", "typing")
         """
+        # Apply personality patience factor
+        min_seconds *= self.patience_level
+        max_seconds *= self.patience_level
+
         if delay_type == "thinking":
-            # Longer pauses that simulate thinking
-            delay = random.uniform(1.0, 3.5)
+            # Longer pauses that simulate thinking - use gaussian distribution
+            delay = self._gaussian_delay(1.0, 4.0, skew=0.3)
         elif delay_type == "reading":
             # Medium pauses for reading content
-            delay = random.uniform(0.8, 2.0)
+            delay = self._gaussian_delay(0.8, 2.5, skew=0.1)
         elif delay_type == "typing":
             # Short pauses between keystrokes
-            delay = random.uniform(0.05, 0.15)
+            delay = self._gaussian_delay(0.05, 0.2)
         else:
             # Normal interaction delay
-            delay = random.uniform(min_seconds, max_seconds)
+            delay = self._gaussian_delay(min_seconds, max_seconds)
 
-        # Add occasional longer pauses (10% chance) to simulate distraction
-        if random.random() < 0.1:
-            delay += random.uniform(0.5, 2.0)
+        # Add occasional longer pauses to simulate distraction (varies by personality)
+        if random.random() < self.distraction_probability:
+            # Distraction length varies - sometimes brief, sometimes long
+            distraction_types = [
+                (0.3, 0.8, 0.5),   # Brief distraction (50% chance)
+                (0.8, 2.0, 0.3),   # Medium distraction (30% chance)
+                (2.0, 5.0, 0.15),  # Long distraction (15% chance)
+                (5.0, 10.0, 0.05), # Very long distraction (5% chance)
+            ]
+
+            for min_d, max_d, prob in distraction_types:
+                if random.random() < prob:
+                    delay += self._gaussian_delay(min_d, max_d)
+                    break
 
         await asyncio.sleep(delay)
 
@@ -54,6 +106,8 @@ class SignupFormFiller:
             text: The text to type
             use_fill: If True, use fill() instead of type() for speed (less human-like)
         """
+        self.actions_count += 1
+
         if use_fill or len(text) > 30:
             # For long text or when speed is preferred, use fill but add delays
             await self.page.fill(selector, text)
@@ -64,53 +118,148 @@ class SignupFormFiller:
             await self.human_delay(0.1, 0.3)
 
             for i, char in enumerate(text):
-                await self.page.type(selector, char, delay=random.uniform(50, 150))
+                # Variable typing speed based on personality and character
+                base_delay = self._gaussian_delay(50, 150) * self.typing_speed_factor
+
+                # Some characters are harder to type (shift keys, numbers, special chars)
+                if char.isupper() or char.isdigit() or not char.isalnum():
+                    base_delay *= random.uniform(1.1, 1.4)
+
+                await self.page.type(selector, char, delay=base_delay)
 
                 # Occasional longer pauses (simulate thinking or looking at keyboard)
-                if random.random() < 0.1:
+                # Less likely if we just made a mistake
+                if random.random() < 0.08 and (self.actions_count - self.last_mistake_action) > 3:
                     await self.human_delay(0.2, 0.6, "thinking")
 
-                # Very rarely make a "mistake" and correct it (5% chance)
-                if random.random() < 0.05 and i < len(text) - 1:
-                    # Type a wrong character
-                    wrong_char = random.choice('abcdefghijklmnopqrstuvwxyz')
-                    await self.page.type(selector, wrong_char, delay=random.uniform(50, 100))
-                    await self.human_delay(0.1, 0.3)
-                    # Delete it
-                    await self.page.press(selector, 'Backspace')
-                    await self.human_delay(0.1, 0.2)
+                # Make mistakes based on personality, but not too frequently
+                should_make_mistake = (
+                    random.random() < self.mistake_probability and
+                    i < len(text) - 1 and
+                    (self.actions_count - self.last_mistake_action) > 5  # At least 5 actions since last mistake
+                )
+
+                if should_make_mistake:
+                    self.last_mistake_action = self.actions_count
+
+                    # Different types of mistakes
+                    mistake_type = random.random()
+
+                    if mistake_type < 0.6:
+                        # Type wrong character (most common) - use nearby keys
+                        keyboard_neighbors = {
+                            'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'sfcxe', 'e': 'wrds',
+                            'f': 'dgcvrt', 'g': 'fhbvty', 'h': 'gjnbyu', 'i': 'ujko', 'j': 'hknmu',
+                            'k': 'jlmio', 'l': 'kop', 'm': 'njk', 'n': 'bhjm', 'o': 'iklp',
+                            'p': 'ol', 'q': 'wa', 'r': 'etfd', 's': 'awedxz', 't': 'ryfg',
+                            'u': 'yihj', 'v': 'cfgb', 'w': 'qase', 'x': 'zsdc', 'y': 'tugh',
+                            'z': 'asx'
+                        }
+
+                        next_char = text[i+1] if i+1 < len(text) else char
+                        # Sometimes type the next character early, sometimes a neighbor key
+                        if random.random() < 0.4 and next_char.isalpha():
+                            wrong_char = next_char.lower()
+                        else:
+                            neighbors = keyboard_neighbors.get(char.lower(), 'abcdefghijklmnopqrstuvwxyz')
+                            wrong_char = random.choice(neighbors)
+
+                        await self.page.type(selector, wrong_char, delay=self._gaussian_delay(50, 100))
+
+                        # Reaction time - notice the mistake
+                        await self.human_delay(0.1, 0.4)
+
+                        # Delete it (sometimes delete multiple times if "panicked")
+                        backspaces = 1 if random.random() < 0.9 else 2
+                        for _ in range(backspaces):
+                            await self.page.press(selector, 'Backspace')
+                            await self.human_delay(0.05, 0.15)
+
+                    elif mistake_type < 0.85:
+                        # Double-type a character (25% of mistakes)
+                        await self.page.type(selector, char, delay=self._gaussian_delay(30, 80))
+                        await self.human_delay(0.1, 0.3)
+                        await self.page.press(selector, 'Backspace')
+                        await self.human_delay(0.05, 0.15)
+
+                    else:
+                        # Skip a character then go back (15% of mistakes)
+                        # Skip current, type next, then backspace and fix
+                        if i + 1 < len(text):
+                            next_char = text[i + 1]
+                            await self.page.type(selector, next_char, delay=self._gaussian_delay(50, 100))
+                            await self.human_delay(0.15, 0.35)
+                            await self.page.press(selector, 'Backspace')
+                            await self.human_delay(0.05, 0.15)
+                            # Now type the correct character (will be typed in next iteration)
 
             await self.human_delay(0.2, 0.5)
 
     async def human_click(self, selector, force=False):
         """
-        Click an element with human-like behavior including mouse movement simulation.
+        Click an element with human-like behavior.
+        Camoufox's humanize=True handles mouse movement automatically.
 
         Args:
             selector: The element selector to click
             force: Whether to force the click
         """
-        # Small delay before clicking (simulating mouse movement)
+        self.actions_count += 1
+
+        # Small delay before clicking (simulating decision time)
         await self.human_delay(0.2, 0.6)
 
-        # Get element position for more realistic interaction
-        try:
-            element = await self.page.query_selector(selector)
-            if element:
-                box = await element.bounding_box()
-                if box:
-                    # Move mouse to element with slight randomness
-                    x = box['x'] + box['width'] * random.uniform(0.3, 0.7)
-                    y = box['y'] + box['height'] * random.uniform(0.3, 0.7)
-                    await self.page.mouse.move(x, y)
-                    await self.human_delay(0.1, 0.3)
-        except:
-            pass
-
-        # Click the element
+        # Camoufox with humanize=True will automatically add realistic mouse movement
+        # We just need to click - it handles the rest
         await self.page.click(selector, force=force)
+
+        # Vary post-click delay
         await self.human_delay(0.3, 0.7)
-        
+
+    async def random_mouse_movement(self):
+        """
+        Occasionally move mouse randomly to simulate natural behavior.
+        Humans don't keep mouse perfectly still.
+        Camoufox's humanize=True will make the movement realistic.
+        """
+        if random.random() < 0.3:  # 30% chance
+            try:
+                # Get viewport size
+                viewport = self.page.viewport_size
+                if viewport:
+                    # Move to a random position (Camoufox will humanize the movement)
+                    x = random.randint(100, viewport['width'] - 100)
+                    y = random.randint(100, viewport['height'] - 100)
+                    await self.page.mouse.move(x, y)
+                    await asyncio.sleep(self._gaussian_delay(0.1, 0.3))
+            except:
+                pass
+
+    async def occasional_idle(self):
+        """
+        Simulate occasional moments where user is idle (reading, thinking, distracted).
+        This should be called between major actions.
+        """
+        # Vary idle behavior based on action count
+        idle_chance = 0.15 if self.actions_count < 5 else 0.25  # More likely to pause as form progresses
+
+        if random.random() < idle_chance:
+            idle_type = random.random()
+
+            if idle_type < 0.5:
+                # Short pause - reading or thinking
+                await self.human_delay(1.0, 3.0, "reading")
+            elif idle_type < 0.8:
+                # Medium pause - maybe checking something
+                await self.human_delay(2.0, 5.0, "thinking")
+                # Maybe move mouse during this time
+                await self.random_mouse_movement()
+            else:
+                # Long pause - distracted or multitasking
+                await self.human_delay(3.0, 8.0, "thinking")
+                if random.random() < 0.5:
+                    await self.random_mouse_movement()
+
     async def navigate_to_signup(self):
         """Navigate to Outlook signup page"""
         print("Navigating to Outlook signup page...")
@@ -127,6 +276,9 @@ class SignupFormFiller:
 
         # Human-like delay to simulate reading the page
         await self.human_delay(1.5, 3.5, "reading")
+
+        # Sometimes move mouse while reading
+        await self.random_mouse_movement()
         
     async def fill_email(self):
         """Fill email field and generate available email"""
