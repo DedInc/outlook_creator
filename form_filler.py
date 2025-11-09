@@ -21,9 +21,9 @@ class SignupFormFiller:
         # Create a unique "personality" for this session to vary behavior
         # This makes each bot instance behave slightly differently
         self.typing_speed_factor = random.uniform(0.7, 1.4)  # Some people type faster/slower
-        self.mistake_probability = random.uniform(0.02, 0.08)  # 2-8% chance of mistakes
-        self.distraction_probability = random.uniform(0.05, 0.15)  # 5-15% chance of distraction
-        self.patience_level = random.uniform(0.8, 1.3)  # Affects how long they wait
+        self.mistake_probability = random.uniform(0.01, 0.03)  # 1-3% chance of mistakes
+        self.distraction_probability = random.uniform(0.02, 0.05)  # 2-5% chance of distraction
+        self.patience_level = random.uniform(0.8, 1.2)  # Affects how long they wait
         self.mouse_precision = random.uniform(0.2, 0.8)  # How precisely they click
 
         # Track session state for more realistic behavior
@@ -69,25 +69,24 @@ class SignupFormFiller:
 
         if delay_type == "thinking":
             # Longer pauses that simulate thinking - use gaussian distribution
-            delay = self._gaussian_delay(1.0, 4.0, skew=0.3)
+            delay = self._gaussian_delay(0.5, 1.5, skew=0.3)
         elif delay_type == "reading":
             # Medium pauses for reading content
-            delay = self._gaussian_delay(0.8, 2.5, skew=0.1)
+            delay = self._gaussian_delay(0.3, 0.8, skew=0.1)
         elif delay_type == "typing":
             # Short pauses between keystrokes
-            delay = self._gaussian_delay(0.05, 0.2)
+            delay = self._gaussian_delay(0.05, 0.15)
         else:
             # Normal interaction delay
             delay = self._gaussian_delay(min_seconds, max_seconds)
 
         # Add occasional longer pauses to simulate distraction (varies by personality)
         if random.random() < self.distraction_probability:
-            # Distraction length varies - sometimes brief, sometimes long
+            # Distraction length varies - mostly brief
             distraction_types = [
-                (0.3, 0.8, 0.5),   # Brief distraction (50% chance)
-                (0.8, 2.0, 0.3),   # Medium distraction (30% chance)
-                (2.0, 5.0, 0.15),  # Long distraction (15% chance)
-                (5.0, 10.0, 0.05), # Very long distraction (5% chance)
+                (0.2, 0.5, 0.7),   # Brief distraction (70% chance)
+                (0.5, 1.0, 0.25),  # Medium distraction (25% chance)
+                (1.0, 2.0, 0.05),  # Long distraction (5% chance)
             ]
 
             for min_d, max_d, prob in distraction_types:
@@ -207,14 +206,14 @@ class SignupFormFiller:
         self.actions_count += 1
 
         # Small delay before clicking (simulating decision time)
-        await self.human_delay(0.2, 0.6)
+        await self.human_delay(0.1, 0.3)
 
         # Camoufox with humanize=True will automatically add realistic mouse movement
         # We just need to click - it handles the rest
         await self.page.click(selector, force=force)
 
         # Vary post-click delay
-        await self.human_delay(0.3, 0.7)
+        await self.human_delay(0.2, 0.4)
 
     async def random_mouse_movement(self):
         """
@@ -241,22 +240,22 @@ class SignupFormFiller:
         This should be called between major actions.
         """
         # Vary idle behavior based on action count
-        idle_chance = 0.15 if self.actions_count < 5 else 0.25  # More likely to pause as form progresses
+        idle_chance = 0.08 if self.actions_count < 5 else 0.12  # Reduced idle probability
 
         if random.random() < idle_chance:
             idle_type = random.random()
 
-            if idle_type < 0.5:
-                # Short pause - reading or thinking
-                await self.human_delay(1.0, 3.0, "reading")
-            elif idle_type < 0.8:
+            if idle_type < 0.7:
+                # Short pause - quick reading or thinking
+                await self.human_delay(0.5, 1.0, "reading")
+            elif idle_type < 0.95:
                 # Medium pause - maybe checking something
-                await self.human_delay(2.0, 5.0, "thinking")
+                await self.human_delay(1.0, 2.0, "thinking")
                 # Maybe move mouse during this time
                 await self.random_mouse_movement()
             else:
-                # Long pause - distracted or multitasking
-                await self.human_delay(3.0, 8.0, "thinking")
+                # Long pause - distracted or multitasking (rare)
+                await self.human_delay(2.0, 3.5, "thinking")
                 if random.random() < 0.5:
                     await self.random_mouse_movement()
 
@@ -275,7 +274,7 @@ class SignupFormFiller:
             print("Warning: Signup form not detected quickly, but continuing...")
 
         # Human-like delay to simulate reading the page
-        await self.human_delay(1.5, 3.5, "reading")
+        await self.human_delay(0.5, 1.2, "reading")
 
         # Sometimes move mouse while reading
         await self.random_mouse_movement()
@@ -299,7 +298,7 @@ class SignupFormFiller:
                 print("Found input[name='MemberName']")
 
         # Small delay before starting to type (simulate reading the field label)
-        await self.human_delay(0.5, 1.2, "reading")
+        await self.human_delay(0.3, 0.7, "reading")
 
         # Generate fake data and check email availability
         email_available = False
@@ -356,7 +355,7 @@ class SignupFormFiller:
             print("Found password input: #Password")
 
         # Small delay before typing (simulate thinking about password)
-        await self.human_delay(0.8, 1.8, "thinking")
+        await self.human_delay(0.4, 1.0, "thinking")
 
         # Type the password into the input field with human-like behavior
         await self.human_type(password_input_selector, password, use_fill=True)
@@ -369,8 +368,8 @@ class SignupFormFiller:
             "July", "August", "September", "October", "November", "December"
         ]
 
-        # Small delay before interacting (simulate reading the form)
-        await self.human_delay(0.4, 0.9, "reading")
+        # Small delay before interacting (quick glance at form)
+        await self.human_delay(0.2, 0.4, "reading")
 
         # Wait until the birth month dropdown is available
         try:
@@ -393,12 +392,12 @@ class SignupFormFiller:
 
             # Get month name and click the option by text
             month_name = month_names[birth_date.month - 1]
-            await self.human_delay(0.3, 0.7, "reading")
+            await self.human_delay(0.1, 0.3, "reading")
             await self.human_click(f'[role="option"]:has-text("{month_name}")')
             print(f"Selected birth month: {month_name}")
 
-        # Human-like delay between fields
-        await self.human_delay(0.4, 0.9)
+        # Quick transition between fields (people know their birth date)
+        await self.human_delay(0.2, 0.4)
 
         # Wait until the birth day dropdown is available
         try:
@@ -420,12 +419,12 @@ class SignupFormFiller:
                 await self.page.wait_for_selector('[role="option"]', timeout=5000)
 
             # Click the option by text (day number)
-            await self.human_delay(0.2, 0.5, "reading")
+            await self.human_delay(0.1, 0.3, "reading")
             await self.human_click(f'[role="option"]:has-text("{birth_date.day}")')
             print(f"Selected birth day: {birth_date.day}")
 
-        # Human-like delay between fields
-        await self.human_delay(0.4, 0.9)
+        # Quick transition between fields
+        await self.human_delay(0.2, 0.4)
 
         # Wait until the birth year input field is available
         try:
@@ -445,15 +444,15 @@ class SignupFormFiller:
             # Wait for first name input
             await self.page.wait_for_selector('input[name="firstNameInput"]', timeout=10000)
 
-            # Small delay before typing (simulate reading the field)
-            await self.human_delay(0.5, 1.0, "reading")
+            # Small delay before typing
+            await self.human_delay(0.2, 0.5, "reading")
 
             # Type first name with human-like behavior
             await self.human_type('input[name="firstNameInput"]', first_name)
             print(f"Filled first name: {first_name}")
 
-            # Human-like delay between fields (moving to next field)
-            await self.human_delay(0.5, 1.2)
+            # Quick transition between fields
+            await self.human_delay(0.3, 0.6)
 
             # Type last name with human-like behavior
             await self.human_type('input[name="lastNameInput"]', last_name)
@@ -518,8 +517,8 @@ class SignupFormFiller:
             print('   Get one at: https://nopecha.com/manage')
 
         # IMPORTANT: Check for Microsoft block BEFORE waiting for CAPTCHA
-        # Wait 2-3 seconds for the page to fully load and show block if present
-        await self.human_delay(2.0, 3.0, "reading")
+        # Wait briefly for the page to fully load and show block if present
+        await self.human_delay(1.0, 1.5, "reading")
 
         is_blocked = await self.check_for_block()
         if is_blocked:

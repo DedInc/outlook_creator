@@ -163,7 +163,7 @@ class AssocManager:
         try:
             button = await self.page.wait_for_selector('button[data-testid="primaryButton"]', timeout=5000)
             if button:
-                await self.page.click('button[data-testid="primaryButton"]')
+                await self.page.click('button[data-testid="secondaryButton"]') # click to No
                 return True
         except PlaywrightTimeoutError:
             # Button not present, that's okay

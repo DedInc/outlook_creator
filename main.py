@@ -4,6 +4,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from browser_manager import BrowserManager
 from form_filler import SignupFormFiller
 from assoc_manager import AssocManager
+from email_forwarding_enabler import enable_email_forwarding
 
 # Load the configuration from config.json
 with open('config.json', 'r') as f:
@@ -94,6 +95,10 @@ class AccGen:
         
         # Add email aliases (assocs)
         assoc_data = await self.add_email_aliases()
+        
+        # Enable email forwarding to mail.tm after assocs are created
+        if assoc_data and assoc_data.get('mailtm_email'):
+            await self.enable_email_forwarding(assoc_data['mailtm_email'])
 
         # Save account with aliases and MailTM info
         await self.form_filler.save_account(email, password, first_name, last_name, birth_date, assoc_data)
@@ -122,6 +127,21 @@ class AccGen:
             print(f"\n⚠️  Error adding aliases: {e}")
             print("Continuing without aliases...")
             return None
+    
+    async def enable_email_forwarding(self, mail_tm_email):
+        """Enable email forwarding to mail.tm for the created account"""
+        try:
+            page = self.browser_manager.page
+            success = await enable_email_forwarding(page, mail_tm_email)
+            
+            if success:
+                print(f"\n✓ Successfully enabled email forwarding to {mail_tm_email}")
+            else:
+                print("\n⚠️  Failed to enable email forwarding")
+                
+        except Exception as e:
+            print(f"\n⚠️  Error enabling email forwarding: {e}")
+            print("Continuing without email forwarding enabled...")
 
     async def create_account(self):
         """Main account creation loop with retry logic"""

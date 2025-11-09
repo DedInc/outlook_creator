@@ -38,6 +38,8 @@ def check_email(email):
                 api_canary = codecs.decode(api_canary_encoded, 'unicode_escape')
             else:
                 print("Could not find 'apiCanary' in the response")
+                # Return error response if apiCanary is not found
+                return {'isAvailable': False, 'error': 'apiCanary not found'}
 
             try:
                 # Try to extract the 'amsc' cookie from the response
